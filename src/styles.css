@@ -320,6 +320,72 @@ iframe {
   margin-top: 1rem;
 }
 
+.diagnostic-sections {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.diagnostic-section {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.diagnostic-section h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.diagnostic-row {
+  display: grid;
+  grid-template-columns: 1.8rem 1fr;
+  gap: 0.7rem;
+  min-height: 5.5rem;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+  background: rgb(255 255 255 / 6%);
+}
+
+.diagnostic-row.ok {
+  border-color: rgb(53 229 142 / 26%);
+}
+
+.diagnostic-row.warn {
+  border-color: rgb(245 187 90 / 30%);
+}
+
+.diagnostic-row.fail {
+  border-color: rgb(242 113 69 / 34%);
+}
+
+.diagnostic-row > div:last-child {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.diagnostic-row span,
+.diagnostic-row code {
+  color: #aebfb6;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-row code {
+  font-size: 0.78rem;
+}
+
+.diagnostic-status {
+  color: #b9f6d2;
+}
+
 .log-box {
   margin-top: 1rem;
 }

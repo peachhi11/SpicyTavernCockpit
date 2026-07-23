@@ -32,6 +32,22 @@ export type EngineLogTail = {
   message: string;
 };
 
+export type DiagnosticStatus = "ok" | "warn" | "fail";
+
+export type DiagnosticCheck = {
+  id: string;
+  category: string;
+  label: string;
+  status: DiagnosticStatus;
+  message: string;
+  detail: string;
+};
+
+export type DiagnosticsSnapshot = {
+  generatedAt: string;
+  checks: DiagnosticCheck[];
+};
+
 export type NetworkSnapshot = {
   publicIp: string;
   city: string;
@@ -167,6 +183,25 @@ export async function engineLogTail(id: string, lineCount = 160): Promise<Engine
     };
   }
   return invoke<EngineLogTail>("engine_log_tail", { id, lineCount });
+}
+
+export async function diagnosticsSnapshot(): Promise<DiagnosticsSnapshot> {
+  if (!isTauriRuntime()) {
+    return {
+      generatedAt: new Date().toISOString(),
+      checks: browserConfigs().flatMap((engine) => [
+        {
+          id: `${engine.id}:preview`,
+          category: "Browser Preview",
+          label: engine.name,
+          status: "warn",
+          message: "Diagnostics run from the desktop shell.",
+          detail: engine.cwd,
+        } satisfies DiagnosticCheck,
+      ]),
+    };
+  }
+  return invoke<DiagnosticsSnapshot>("diagnostics_snapshot");
 }
 
 export async function saveEngineConfig(engine: EngineConfig): Promise<EngineStatus> {

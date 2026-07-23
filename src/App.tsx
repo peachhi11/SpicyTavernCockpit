@@ -1,6 +1,8 @@
 import {
   Activity,
+  AlertTriangle,
   Cable,
+  CheckCircle2,
   CircleStop,
   ExternalLink,
   Globe2,
@@ -13,14 +15,19 @@ import {
   Settings2,
   ShieldCheck,
   SquareTerminal,
+  Stethoscope,
+  XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
   EngineConfig,
+  DiagnosticCheck,
+  DiagnosticsSnapshot,
   EngineLogTail,
   EngineStatus,
   NetworkSnapshot,
+  diagnosticsSnapshot,
   engineLogTail,
   isTauriRuntime,
   listEngines,
@@ -34,7 +41,7 @@ import {
   stopEngine,
 } from "./native";
 
-type ViewMode = "embedded" | "logs" | "network" | "registry";
+type ViewMode = "embedded" | "logs" | "network" | "registry" | "diagnostics";
 
 const stateLabel: Record<string, string> = {
   running: "Running",
@@ -197,6 +204,10 @@ export function App() {
               <Globe2 size={17} />
               Network
             </button>
+            <button onClick={() => setMode("diagnostics")} type="button">
+              <Stethoscope size={17} />
+              Diagnostics
+            </button>
             <button onClick={() => setMode("registry")} type="button">
               <Settings2 size={17} />
               Registry
@@ -257,6 +268,8 @@ export function App() {
 
         {mode === "network" ? (
           <NetworkPanel network={network} onRefresh={() => void refreshNetwork()} />
+        ) : mode === "diagnostics" ? (
+          <DiagnosticsPanel />
         ) : mode === "logs" ? (
           <LogPanel selected={selected} />
         ) : mode === "registry" ? (
@@ -342,6 +355,91 @@ function NetworkPanel(props: { network: NetworkSnapshot | null; onRefresh: () =>
       </div>
       <p className="panel-note">{snapshot?.message || "Network checks run from the desktop shell process."}</p>
     </div>
+  );
+}
+
+function DiagnosticsPanel() {
+  const [snapshot, setSnapshot] = useState<DiagnosticsSnapshot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function refreshDiagnostics() {
+    setBusy(true);
+    setError("");
+    try {
+      setSnapshot(await diagnosticsSnapshot());
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not refresh diagnostics.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshDiagnostics();
+  }, []);
+
+  const checksByCategory = useMemo(() => groupChecks(snapshot?.checks ?? []), [snapshot]);
+
+  return (
+    <div className="detail-panel diagnostics-panel">
+      <div className="panel-title">
+        <div>
+          <p className="eyebrow">Health</p>
+          <h3>Diagnostics</h3>
+        </div>
+        <button disabled={busy} onClick={() => void refreshDiagnostics()} type="button">
+          <RefreshCw size={17} />
+          Refresh Checks
+        </button>
+      </div>
+      {error && <div className="notice warn">{error}</div>}
+      <p className="panel-note">
+        {snapshot ? `Generated ${new Date(snapshot.generatedAt).toLocaleString()}` : "Diagnostics pending."}
+      </p>
+      <div className="diagnostic-sections">
+        {checksByCategory.map(([category, checks]) => (
+          <section className="diagnostic-section" key={category}>
+            <h4>{category}</h4>
+            <div className="diagnostic-grid">
+              {checks.map((check) => (
+                <DiagnosticRow check={check} key={check.id} />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function groupChecks(checks: DiagnosticCheck[]) {
+  const grouped = new Map<string, DiagnosticCheck[]>();
+  for (const check of checks) {
+    grouped.set(check.category, [...(grouped.get(check.category) ?? []), check]);
+  }
+  return Array.from(grouped.entries());
+}
+
+function DiagnosticRow({ check }: { check: DiagnosticCheck }) {
+  const icon =
+    check.status === "ok" ? (
+      <CheckCircle2 size={17} />
+    ) : check.status === "warn" ? (
+      <AlertTriangle size={17} />
+    ) : (
+      <XCircle size={17} />
+    );
+
+  return (
+    <article className={`diagnostic-row ${check.status}`}>
+      <div className="diagnostic-status">{icon}</div>
+      <div>
+        <strong>{check.label}</strong>
+        <span>{check.message}</span>
+        {check.detail && <code>{check.detail}</code>}
+      </div>
+    </article>
   );
 }
 

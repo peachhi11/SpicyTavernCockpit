@@ -68,6 +68,24 @@ struct EngineLogTail {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DiagnosticCheck {
+    id: String,
+    category: String,
+    label: String,
+    status: String,
+    message: String,
+    detail: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsSnapshot {
+    generated_at: String,
+    checks: Vec<DiagnosticCheck>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NetworkSnapshot {
     public_ip: String,
     city: String,
@@ -291,6 +309,104 @@ fn port_snapshot(port: Option<u16>) -> PortSnapshot {
         } else {
             format!("Port {port} is free.")
         },
+    }
+}
+
+fn diagnostic_check(
+    id: impl Into<String>,
+    category: impl Into<String>,
+    label: impl Into<String>,
+    status: impl Into<String>,
+    message: impl Into<String>,
+    detail: impl Into<String>,
+) -> DiagnosticCheck {
+    DiagnosticCheck {
+        id: id.into(),
+        category: category.into(),
+        label: label.into(),
+        status: status.into(),
+        message: message.into(),
+        detail: detail.into(),
+    }
+}
+
+fn shell_output(command: &str) -> Result<String, String> {
+    let output = Command::new("/bin/zsh")
+        .arg("-lc")
+        .arg(format!(
+            "export PATH=/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/Cellar/node@24/24.18.0/bin:$PATH; {command}"
+        ))
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else if stderr.is_empty() {
+        Err(stdout)
+    } else {
+        Err(stderr)
+    }
+}
+
+fn tool_check(id: &str, label: &str, command: &str) -> DiagnosticCheck {
+    match shell_output(command) {
+        Ok(output) if !output.is_empty() => {
+            diagnostic_check(id, "Toolchain", label, "ok", output, command)
+        }
+        Ok(_) => diagnostic_check(
+            id,
+            "Toolchain",
+            label,
+            "warn",
+            "Command returned no output.",
+            command,
+        ),
+        Err(error) => diagnostic_check(id, "Toolchain", label, "fail", error, command),
+    }
+}
+
+async fn marinara_chub_diagnostic(
+    client: &reqwest::Client,
+    engine: &EngineConfig,
+) -> DiagnosticCheck {
+    let Some(health_url) = engine.health_url.as_deref() else {
+        return diagnostic_check(
+            format!("{}:chub", engine.id),
+            "Marinara Chub",
+            format!("{} Chub egress", engine.name),
+            "warn",
+            "No health URL is configured.",
+            "",
+        );
+    };
+
+    let base = health_url
+        .trim_end_matches("/api/health")
+        .trim_end_matches('/');
+    let url = format!("{base}/api/bot-browser/chub/egress-debug");
+    match client.get(&url).send().await {
+        Ok(response) => {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            diagnostic_check(
+                format!("{}:chub", engine.id),
+                "Marinara Chub",
+                format!("{} Chub egress", engine.name),
+                if status.is_success() { "ok" } else { "fail" },
+                format!("HTTP {status}"),
+                detail.chars().take(800).collect::<String>(),
+            )
+        }
+        Err(error) => diagnostic_check(
+            format!("{}:chub", engine.id),
+            "Marinara Chub",
+            format!("{} Chub egress", engine.name),
+            "fail",
+            error.to_string(),
+            url,
+        ),
     }
 }
 
@@ -652,6 +768,139 @@ async fn reset_engine_registry(
     Ok(statuses)
 }
 
+#[tauri::command]
+async fn diagnostics_snapshot(
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<DiagnosticsSnapshot, String> {
+    let engines = load_registry(&app)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let mut checks = Vec::new();
+    for engine in &engines {
+        let path_exists = Path::new(&engine.cwd).exists();
+        checks.push(diagnostic_check(
+            format!("{}:path", engine.id),
+            "Engine Paths",
+            format!("{} path", engine.name),
+            if path_exists { "ok" } else { "fail" },
+            if path_exists {
+                "Path exists.".to_string()
+            } else {
+                "Path does not exist.".to_string()
+            },
+            engine.cwd.clone(),
+        ));
+
+        let status = status_from_parts(engine, &registry, false, String::new());
+        checks.push(diagnostic_check(
+            format!("{}:process", engine.id),
+            "Processes",
+            format!("{} process", engine.name),
+            match status.process_source.as_str() {
+                "managed" => "ok",
+                "external" => "warn",
+                _ => "warn",
+            },
+            status.process_message,
+            status
+                .pid
+                .map(|pid| format!("pid {pid}"))
+                .unwrap_or_else(|| "No pid".into()),
+        ));
+
+        let port = port_snapshot(engine.port);
+        checks.push(diagnostic_check(
+            format!("{}:port", engine.id),
+            "Ports",
+            format!("{} port", engine.name),
+            if port.listening { "ok" } else { "warn" },
+            port.message,
+            engine
+                .port
+                .map(|port| format!("127.0.0.1:{port}"))
+                .unwrap_or_else(|| "No port configured".into()),
+        ));
+
+        let (health_ok, health_message) = health_for(engine).await;
+        checks.push(diagnostic_check(
+            format!("{}:health", engine.id),
+            "Health Endpoints",
+            format!("{} health", engine.name),
+            if health_ok { "ok" } else { "fail" },
+            health_message,
+            engine.health_url.clone().unwrap_or_default(),
+        ));
+
+        if engine.id.starts_with("marinara") {
+            checks.push(marinara_chub_diagnostic(&client, engine).await);
+        }
+    }
+
+    checks.push(tool_check(
+        "toolchain:node",
+        "Node",
+        "command -v node && node --version",
+    ));
+    checks.push(tool_check(
+        "toolchain:pnpm",
+        "pnpm",
+        "command -v pnpm && pnpm --version",
+    ));
+    checks.push(tool_check(
+        "toolchain:ollama",
+        "Ollama",
+        "command -v ollama && ollama --version",
+    ));
+
+    match network_snapshot().await {
+        Ok(snapshot) => {
+            checks.push(diagnostic_check(
+                "network:egress",
+                "Network",
+                "Default egress",
+                if snapshot.country == "US" {
+                    "ok"
+                } else {
+                    "warn"
+                },
+                snapshot.message,
+                format!(
+                    "{} {} {} {}",
+                    snapshot.public_ip, snapshot.city, snapshot.region, snapshot.org
+                ),
+            ));
+            checks.push(diagnostic_check(
+                "network:chub",
+                "Network",
+                "Chub API reachability",
+                if snapshot.chub_ok { "ok" } else { "fail" },
+                snapshot
+                    .chub_status
+                    .map(|status| format!("HTTP {status}"))
+                    .unwrap_or_else(|| "No HTTP status".into()),
+                format!("{} {}", snapshot.chub_country, snapshot.chub_region),
+            ));
+        }
+        Err(error) => checks.push(diagnostic_check(
+            "network:egress",
+            "Network",
+            "Default egress",
+            "fail",
+            error,
+            "",
+        )),
+    }
+
+    Ok(DiagnosticsSnapshot {
+        generated_at: Utc::now().to_rfc3339(),
+        checks,
+    })
+}
+
 #[derive(Deserialize)]
 struct IpInfo {
     ip: Option<String>,
@@ -758,6 +1007,7 @@ pub fn run() {
             reset_engine_registry,
             restart_engine,
             engine_log_tail,
+            diagnostics_snapshot,
             network_snapshot,
         ])
         .run(tauri::generate_context!())

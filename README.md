@@ -13,7 +13,7 @@ The first cockpit goal is deliberately practical: make the local stack easier to
 - Persisted registry editor for engine paths, launch commands, ports, UI URLs, and health URLs.
 - Start, stop, restart, stop-all, health check, and embedded localhost views.
 - Managed-vs-external process detection for already-running local engines.
-- Network diagnostics for default egress and Chub reachability.
+- Health diagnostics for paths, processes, ports, endpoint reachability, toolchain availability, default egress, and Chub reachability.
 - Per-engine log file locations and in-app log tailing.
 
 ## Local Development
@@ -65,3 +65,7 @@ Default engines:
 The Rust supervisor launches engines through `/bin/zsh -lc` with a Homebrew-aware `PATH`, so registry commands can use `node`, `pnpm`, `./start.sh`, or `ollama serve`. Before launching, it checks the configured listener port and reports an external process instead of spawning a duplicate. Stop and restart only kill child processes that the cockpit launched itself.
 
 The Logs panel tails the last chunk of each managed engine log from the app log directory. Engines started outside the cockpit remain visible through port/process detection, but their external logs are not claimed by this app.
+
+## Health Diagnostics
+
+The Diagnostics panel builds a structured snapshot from the desktop process. It checks configured engine paths, managed/external process state, listener ports, per-engine health URLs, Marinara Chub egress endpoints, `node`, `pnpm`, `ollama`, default public egress, and direct Chub API reachability.
