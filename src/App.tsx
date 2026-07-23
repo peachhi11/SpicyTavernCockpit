@@ -229,40 +229,51 @@ export function App() {
         {notice && <div className="notice warn">{notice}</div>}
 
         {selected && (
-          <section className="status-strip">
-            <StatusPill icon={<Activity size={16} />} label={stateLabel[selected.state]} ok={selected.state === "running"} />
-            <StatusPill
-              icon={<SquareTerminal size={16} />}
-              label={processLabel(selected)}
-              ok={selected.processSource === "managed"}
-            />
-            <StatusPill icon={<Cable size={16} />} label={selected.healthMessage || "Health pending"} ok={selected.healthOk} />
-            <StatusPill icon={<ShieldCheck size={16} />} label={networkLabel(network)} ok={network?.country === "US"} />
-            <div className="engine-actions">
+          <section className="command-deck">
+            <div className="status-strip">
+              <StatusPill icon={<Activity size={16} />} label={stateLabel[selected.state]} ok={selected.state === "running"} />
+              <StatusPill
+                icon={<SquareTerminal size={16} />}
+                label={processLabel(selected)}
+                ok={selected.processSource === "managed"}
+              />
+              <StatusPill icon={<Cable size={16} />} label={selected.healthMessage || "Health pending"} ok={selected.healthOk} />
+              <StatusPill icon={<ShieldCheck size={16} />} label={networkLabel(network)} ok={network?.country === "US"} />
+            </div>
+
+            <div className="forbidden-console">
               <button
+                aria-label={selected.state === "running" ? `Stop ${selected.name}` : `Start ${selected.name}`}
+                className={`forbidden-button ${selected.state === "running" ? "armed" : ""}`}
                 disabled={busyId === selected.id}
-                onClick={() => void runEngineAction(selected.id, "start")}
+                onClick={() => void runEngineAction(selected.id, selected.state === "running" ? "stop" : "start")}
                 type="button"
               >
-                <Play size={17} />
-                Start
+                <span className="forbidden-button-glow" />
+                <span className="forbidden-button-label">
+                  <strong>DO NOT PUSH</strong>
+                  <small>{selected.state === "running" ? "Stop engine" : "Start engine"}</small>
+                </span>
               </button>
-              <button
-                disabled={busyId === selected.id}
-                onClick={() => void runEngineAction(selected.id, "stop")}
-                type="button"
-              >
-                <CircleStop size={17} />
-                Stop
-              </button>
-              <button
-                disabled={busyId === selected.id}
-                onClick={() => void runEngineAction(selected.id, "restart")}
-                type="button"
-              >
-                <Repeat2 size={17} />
-                Restart
-              </button>
+
+              <div className="engine-actions">
+                <button
+                  disabled={busyId === selected.id}
+                  onClick={() => void runEngineAction(selected.id, "restart")}
+                  type="button"
+                >
+                  <Repeat2 size={17} />
+                  Restart
+                </button>
+                <button
+                  disabled={busyId === selected.id}
+                  onClick={() => void runEngineAction(selected.id, "refresh")}
+                  type="button"
+                >
+                  <RefreshCw size={17} />
+                  Refresh Engine
+                </button>
+              </div>
             </div>
           </section>
         )}
