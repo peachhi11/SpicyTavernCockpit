@@ -1,0 +1,37 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "SpicyTavernCockPit",
+  "version": "0.1.0",
+  "identifier": "com.peachhi11.spicytaverncockpit",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:3027",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "SpicyTavernCockPit",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 980,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*; font-src 'self' data:; frame-src http://127.0.0.1:* http://localhost:*; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* http://[::1]:* https://ipinfo.io https://api.chub.ai;",
+      "devCsp": "default-src 'self' http://localhost:3027; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3027; style-src 'self' 'unsafe-inline' http://localhost:3027; img-src 'self' data: blob: http://localhost:3027 http://127.0.0.1:* http://localhost:*; font-src 'self' data: http://localhost:3027; frame-src http://127.0.0.1:* http://localhost:*; connect-src 'self' ipc: http://ipc.localhost http://localhost:3027 http://127.0.0.1:* http://localhost:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* https://ipinfo.io https://api.chub.ai;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "targets": "all",
+    "icon": []
+  }
+}

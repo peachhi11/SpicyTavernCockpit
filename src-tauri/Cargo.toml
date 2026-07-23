@@ -1,0 +1,25 @@
+[package]
+name = "spicy-tavern-cockpit"
+version = "0.1.0"
+description = "Desktop cockpit for supervising Marinara Engine, SillyTavern, Ollama, and local network adapters."
+authors = ["peachhi11"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "spicy_tavern_cockpit_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.3.0", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2.6.2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-store = "2.4.3"
