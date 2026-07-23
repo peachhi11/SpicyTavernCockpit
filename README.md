@@ -14,6 +14,7 @@ The first cockpit goal is deliberately practical: make the local stack easier to
 - Start, stop, restart, stop-all, health check, and embedded localhost views.
 - Managed-vs-external process detection for already-running local engines.
 - Health diagnostics for paths, processes, ports, endpoint reachability, toolchain availability, default egress, and Chub reachability.
+- Local WebView router with embedded route state, reload, copy URL, open-in-browser, and start-from-offline controls.
 - Per-engine log file locations and in-app log tailing.
 
 ## Local Development
@@ -69,3 +70,7 @@ The Logs panel tails the last chunk of each managed engine log from the app log 
 ## Health Diagnostics
 
 The Diagnostics panel builds a structured snapshot from the desktop process. It checks configured engine paths, managed/external process state, listener ports, per-engine health URLs, Marinara Chub egress endpoints, `node`, `pnpm`, `ollama`, default public egress, and direct Chub API reachability.
+
+## Local WebView Router
+
+The embedded view uses the selected engine's registry `uiUrl`. It shows whether that local route appears available from health/process state, lets the user reload the frame without changing engines, copies the route URL, opens it in the browser, and offers a start action when the route is offline.

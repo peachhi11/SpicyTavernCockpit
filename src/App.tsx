@@ -4,6 +4,7 @@ import {
   Cable,
   CheckCircle2,
   CircleStop,
+  Copy,
   ExternalLink,
   Globe2,
   Logs,
@@ -280,7 +281,11 @@ export function App() {
             selected={selected}
           />
         ) : (
-          <EngineFrame selected={selected} />
+          <EngineFrame
+            busy={selected ? busyId === selected.id : false}
+            onStart={(id) => void runEngineAction(id, "start")}
+            selected={selected}
+          />
         )}
       </section>
     </main>
@@ -308,7 +313,23 @@ function processLabel(engine: EngineStatus) {
   return engine.processMessage || "No process";
 }
 
-function EngineFrame({ selected }: { selected: EngineStatus | null }) {
+function EngineFrame({
+  busy,
+  onStart,
+  selected,
+}: {
+  busy: boolean;
+  onStart: (id: string) => void;
+  selected: EngineStatus | null;
+}) {
+  const [frameKey, setFrameKey] = useState(0);
+  const [copyMessage, setCopyMessage] = useState("");
+
+  useEffect(() => {
+    setFrameKey(0);
+    setCopyMessage("");
+  }, [selected?.id, selected?.uiUrl]);
+
   if (!selected?.uiUrl) {
     return (
       <div className="empty-panel">
@@ -319,16 +340,54 @@ function EngineFrame({ selected }: { selected: EngineStatus | null }) {
     );
   }
 
+  const routeReady = selected.portListening || selected.healthOk || selected.state === "running";
+
+  async function copyUrl() {
+    if (!selected?.uiUrl) return;
+    try {
+      await navigator.clipboard.writeText(selected.uiUrl);
+      setCopyMessage("Copied");
+    } catch {
+      setCopyMessage("Copy failed");
+    }
+  }
+
   return (
-    <div className="frame-panel">
+    <div className={`frame-panel ${routeReady ? "ready" : "waiting"}`}>
       <div className="frame-header">
-        <span>{selected.uiUrl}</span>
-        <a href={selected.uiUrl} rel="noreferrer" target="_blank">
-          <ExternalLink size={16} />
-          Open
-        </a>
+        <div className="frame-address">
+          <span className={`route-dot ${routeReady ? "ready" : "waiting"}`} />
+          <span>{selected.uiUrl}</span>
+        </div>
+        <div className="frame-tools">
+          {copyMessage && <small>{copyMessage}</small>}
+          <button onClick={() => void copyUrl()} type="button">
+            <Copy size={16} />
+            Copy
+          </button>
+          <button onClick={() => setFrameKey((current) => current + 1)} type="button">
+            <RefreshCw size={16} />
+            Reload
+          </button>
+          <a href={selected.uiUrl} rel="noreferrer" target="_blank">
+            <ExternalLink size={16} />
+            Open
+          </a>
+        </div>
       </div>
-      <iframe src={selected.uiUrl} title={selected.name} />
+      {routeReady ? (
+        <iframe key={`${selected.id}:${frameKey}`} referrerPolicy="no-referrer" src={selected.uiUrl} title={selected.name} />
+      ) : (
+        <div className="route-placeholder">
+          <SquareTerminal size={44} />
+          <h3>{selected.name} is offline</h3>
+          <p>{selected.processMessage || selected.healthMessage}</p>
+          <button disabled={busy} onClick={() => onStart(selected.id)} type="button">
+            <Play size={17} />
+            Start
+          </button>
+        </div>
+      )}
     </div>
   );
 }
