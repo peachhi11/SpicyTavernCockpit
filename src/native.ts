@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type EngineState = "running" | "stopped" | "unknown";
+export type ProcessSource = "managed" | "external" | "none";
 
 export type EngineConfig = {
   id: string;
@@ -17,8 +18,18 @@ export type EngineStatus = EngineConfig & {
   logPath: string | null;
   state: EngineState;
   pid: number | null;
+  processSource: ProcessSource;
+  processMessage: string;
+  portListening: boolean;
   healthOk: boolean;
   healthMessage: string;
+};
+
+export type EngineLogTail = {
+  path: string | null;
+  content: string;
+  lineCount: number;
+  message: string;
 };
 
 export type NetworkSnapshot = {
@@ -94,6 +105,9 @@ function statusFromConfig(engine: EngineConfig): EngineStatus {
     logPath: null,
     state: "stopped",
     pid: null,
+    processSource: "none",
+    processMessage: engine.port ? `Port ${engine.port} status is only available in the desktop shell.` : browserMessage,
+    portListening: false,
     healthOk: false,
     healthMessage: browserMessage,
   };
@@ -133,9 +147,26 @@ export async function stopEngine(id: string): Promise<EngineStatus> {
   return invoke<EngineStatus>("stop_engine", { id });
 }
 
+export async function restartEngine(id: string): Promise<EngineStatus> {
+  if (!isTauriRuntime()) throw new Error(browserMessage);
+  return invoke<EngineStatus>("restart_engine", { id });
+}
+
 export async function stopAllEngines(): Promise<EngineStatus[]> {
   if (!isTauriRuntime()) return browserConfigs().map(statusFromConfig);
   return invoke<EngineStatus[]>("stop_all_engines");
+}
+
+export async function engineLogTail(id: string, lineCount = 160): Promise<EngineLogTail> {
+  if (!isTauriRuntime()) {
+    return {
+      path: null,
+      content: "",
+      lineCount: 0,
+      message: browserMessage,
+    };
+  }
+  return invoke<EngineLogTail>("engine_log_tail", { id, lineCount });
 }
 
 export async function saveEngineConfig(engine: EngineConfig): Promise<EngineStatus> {

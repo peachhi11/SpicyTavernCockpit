@@ -4,9 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::{create_dir_all, read_to_string, File},
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
+    thread::sleep,
     time::Duration,
 };
 use tauri::{Manager, State};
@@ -48,8 +50,20 @@ struct EngineStatus {
     log_path: Option<String>,
     state: String,
     pid: Option<u32>,
+    process_source: String,
+    process_message: String,
+    port_listening: bool,
     health_ok: bool,
     health_message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineLogTail {
+    path: Option<String>,
+    content: String,
+    line_count: usize,
+    message: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -71,6 +85,13 @@ struct NetworkSnapshot {
 struct ProcessRegistry {
     children: Mutex<HashMap<String, Child>>,
     logs: Mutex<HashMap<String, PathBuf>>,
+}
+
+#[derive(Clone, Debug)]
+struct PortSnapshot {
+    listening: bool,
+    pid: Option<u32>,
+    message: String,
 }
 
 fn default_engines() -> Vec<EngineConfig> {
@@ -217,6 +238,62 @@ fn engine_by_id(app: &tauri::AppHandle, id: &str) -> Result<EngineConfig, String
         .ok_or_else(|| format!("Unknown engine: {id}"))
 }
 
+fn first_lsof_pid(port: u16) -> Option<u32> {
+    let tcp_filter = format!("-iTCP:{port}");
+    let output = Command::new("lsof")
+        .args(["-nP", tcp_filter.as_str(), "-sTCP:LISTEN", "-t"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+fn port_snapshot(port: Option<u16>) -> PortSnapshot {
+    let Some(port) = port else {
+        return PortSnapshot {
+            listening: false,
+            pid: None,
+            message: "No listener port configured.".into(),
+        };
+    };
+
+    if let Some(pid) = first_lsof_pid(port) {
+        return PortSnapshot {
+            listening: true,
+            pid: Some(pid),
+            message: format!("Port {port} is listening on pid {pid}."),
+        };
+    }
+
+    let address: SocketAddr = match format!("127.0.0.1:{port}").parse() {
+        Ok(address) => address,
+        Err(_) => {
+            return PortSnapshot {
+                listening: false,
+                pid: None,
+                message: format!("Port {port} is not a valid local socket."),
+            };
+        }
+    };
+
+    let listening = TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok();
+    PortSnapshot {
+        listening,
+        pid: None,
+        message: if listening {
+            format!("Port {port} accepted a local connection.")
+        } else {
+            format!("Port {port} is free.")
+        },
+    }
+}
+
 fn log_path(app: &tauri::AppHandle, engine_id: &str) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -233,21 +310,46 @@ fn status_from_parts(
     health_ok: bool,
     health_message: String,
 ) -> EngineStatus {
-    let (pid, state) = {
+    let managed_pid = {
         let mut children = registry.children.lock().expect("process registry poisoned");
         if let Some(child) = children.get_mut(&engine.id) {
             match child.try_wait() {
                 Ok(Some(_)) => {
                     children.remove(&engine.id);
-                    (None, "stopped".to_string())
+                    None
                 }
-                Ok(None) => (Some(child.id()), "running".to_string()),
-                Err(_) => (Some(child.id()), "unknown".to_string()),
+                Ok(None) => Some(child.id()),
+                Err(_) => Some(child.id()),
             }
         } else {
-            (None, "stopped".to_string())
+            None
         }
     };
+
+    let port = port_snapshot(engine.port);
+    let (pid, state, process_source, process_message) = if let Some(pid) = managed_pid {
+        (
+            Some(pid),
+            "running".to_string(),
+            "managed".to_string(),
+            format!("Managed process pid {pid}."),
+        )
+    } else if port.listening {
+        (
+            port.pid,
+            "running".to_string(),
+            "external".to_string(),
+            port.message.clone(),
+        )
+    } else {
+        (
+            None,
+            "stopped".to_string(),
+            "none".to_string(),
+            port.message.clone(),
+        )
+    };
+
     let log_path = registry
         .logs
         .lock()
@@ -267,6 +369,9 @@ fn status_from_parts(
         log_path,
         state,
         pid,
+        process_source,
+        process_message,
+        port_listening: port.listening,
         health_ok,
         health_message,
     }
@@ -351,6 +456,11 @@ async fn start_engine(
         return Ok(build_status(&engine, &registry).await);
     }
 
+    let port = port_snapshot(engine.port);
+    if port.listening {
+        return Ok(build_status(&engine, &registry).await);
+    }
+
     let path = log_path(&app, &engine.id)?;
     let stdout = File::options()
         .create(true)
@@ -364,7 +474,7 @@ async fn start_engine(
     let child = Command::new("/bin/zsh")
         .arg("-lc")
         .arg(format!(
-            "printf '\\n[%s] starting {}\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"; {}",
+            "export PATH=/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/Cellar/node@24/24.18.0/bin:$PATH; printf '\\n[%s] starting {}\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"; {}",
             engine.id, engine.command
         ))
         .current_dir(&engine.cwd)
@@ -388,6 +498,70 @@ async fn start_engine(
     Ok(build_status(&engine, &registry).await)
 }
 
+fn stop_managed_child(engine_id: &str, registry: &ProcessRegistry) -> bool {
+    if let Some(mut child) = registry
+        .children
+        .lock()
+        .expect("process registry poisoned")
+        .remove(engine_id)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return true;
+    }
+    false
+}
+
+fn tail_lines(content: &str, line_count: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(line_count.max(1));
+    lines[start..].join("\n")
+}
+
+#[tauri::command]
+fn engine_log_tail(
+    id: String,
+    line_count: Option<usize>,
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<EngineLogTail, String> {
+    let engine = engine_by_id(&app, &id)?;
+    let count = line_count.unwrap_or(160);
+    let path = registry
+        .logs
+        .lock()
+        .expect("log registry poisoned")
+        .get(&engine.id)
+        .cloned()
+        .unwrap_or(log_path(&app, &engine.id)?);
+    let path_text = path.to_string_lossy().to_string();
+
+    if !path.exists() {
+        return Ok(EngineLogTail {
+            path: Some(path_text),
+            content: String::new(),
+            line_count: 0,
+            message: "No log file exists yet for this engine.".into(),
+        });
+    }
+
+    let content =
+        read_to_string(&path).map_err(|error| format!("Could not read log file: {error}"))?;
+    let tail = tail_lines(&content, count);
+    let returned = tail.lines().count();
+
+    Ok(EngineLogTail {
+        path: Some(path_text),
+        content: tail,
+        line_count: returned,
+        message: if returned == 0 {
+            "Log file is empty.".into()
+        } else {
+            format!("Showing last {returned} log lines.")
+        },
+    })
+}
+
 #[tauri::command]
 async fn stop_engine(
     id: String,
@@ -395,16 +569,31 @@ async fn stop_engine(
     registry: State<'_, ProcessRegistry>,
 ) -> Result<EngineStatus, String> {
     let engine = engine_by_id(&app, &id)?;
-    if let Some(mut child) = registry
-        .children
-        .lock()
-        .expect("process registry poisoned")
-        .remove(&engine.id)
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    stop_managed_child(&engine.id, &registry);
     Ok(build_status(&engine, &registry).await)
+}
+
+#[tauri::command]
+async fn restart_engine(
+    id: String,
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<EngineStatus, String> {
+    let engine = engine_by_id(&app, &id)?;
+    let stopped_managed_process = stop_managed_child(&engine.id, &registry);
+
+    if !stopped_managed_process {
+        let port = port_snapshot(engine.port);
+        if port.listening {
+            return Err(format!(
+                "{} is already running outside this cockpit. {} Stop that process first before restarting here.",
+                engine.name, port.message
+            ));
+        }
+    }
+
+    sleep(Duration::from_millis(350));
+    start_engine(id, app, registry).await
 }
 
 #[tauri::command]
@@ -567,6 +756,8 @@ pub fn run() {
             stop_all_engines,
             save_engine_config,
             reset_engine_registry,
+            restart_engine,
+            engine_log_tail,
             network_snapshot,
         ])
         .run(tauri::generate_context!())

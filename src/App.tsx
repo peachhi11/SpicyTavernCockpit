@@ -7,6 +7,7 @@ import {
   Logs,
   Play,
   RefreshCw,
+  Repeat2,
   RotateCcw,
   Save,
   Settings2,
@@ -17,13 +18,16 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   EngineConfig,
+  EngineLogTail,
   EngineStatus,
   NetworkSnapshot,
+  engineLogTail,
   isTauriRuntime,
   listEngines,
   networkSnapshot,
   refreshEngine,
   resetEngineRegistry,
+  restartEngine,
   saveEngineConfig,
   startEngine,
   stopAllEngines,
@@ -80,7 +84,7 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function runEngineAction(id: string, action: "start" | "stop" | "refresh") {
+  async function runEngineAction(id: string, action: "start" | "stop" | "restart" | "refresh") {
     setBusyId(id);
     setNotice("");
     try {
@@ -89,7 +93,9 @@ export function App() {
           ? await startEngine(id)
           : action === "stop"
             ? await stopEngine(id)
-            : await refreshEngine(id);
+            : action === "restart"
+              ? await restartEngine(id)
+              : await refreshEngine(id);
       setEngines((current) => current.map((engine) => (engine.id === id ? status : engine)));
       if (action === "start") setMode("embedded");
     } catch (error) {
@@ -213,6 +219,11 @@ export function App() {
         {selected && (
           <section className="status-strip">
             <StatusPill icon={<Activity size={16} />} label={stateLabel[selected.state]} ok={selected.state === "running"} />
+            <StatusPill
+              icon={<SquareTerminal size={16} />}
+              label={processLabel(selected)}
+              ok={selected.processSource === "managed"}
+            />
             <StatusPill icon={<Cable size={16} />} label={selected.healthMessage || "Health pending"} ok={selected.healthOk} />
             <StatusPill icon={<ShieldCheck size={16} />} label={networkLabel(network)} ok={network?.country === "US"} />
             <div className="engine-actions">
@@ -231,6 +242,14 @@ export function App() {
               >
                 <CircleStop size={17} />
                 Stop
+              </button>
+              <button
+                disabled={busyId === selected.id}
+                onClick={() => void runEngineAction(selected.id, "restart")}
+                type="button"
+              >
+                <Repeat2 size={17} />
+                Restart
               </button>
             </div>
           </section>
@@ -268,6 +287,12 @@ function networkLabel(snapshot: NetworkSnapshot | null) {
   if (!snapshot) return "Network pending";
   if (snapshot.country) return `${snapshot.country} · ${snapshot.publicIp}`;
   return snapshot.message || "Network unknown";
+}
+
+function processLabel(engine: EngineStatus) {
+  if (engine.processSource === "managed") return engine.pid ? `Managed pid ${engine.pid}` : "Managed process";
+  if (engine.processSource === "external") return engine.processMessage || "Running outside cockpit";
+  return engine.processMessage || "No process";
 }
 
 function EngineFrame({ selected }: { selected: EngineStatus | null }) {
@@ -321,6 +346,38 @@ function NetworkPanel(props: { network: NetworkSnapshot | null; onRefresh: () =>
 }
 
 function LogPanel({ selected }: { selected: EngineStatus | null }) {
+  const [tail, setTail] = useState<EngineLogTail | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refreshTail() {
+    if (!selected) {
+      setTail(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      setTail(await engineLogTail(selected.id));
+    } catch (error) {
+      setTail({
+        path: selected.logPath,
+        content: "",
+        lineCount: 0,
+        message: error instanceof Error ? error.message : "Could not read log tail.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshTail();
+    if (!selected) return;
+    const timer = window.setInterval(() => {
+      void refreshTail();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [selected?.id, selected?.logPath]);
+
   return (
     <div className="detail-panel">
       <div className="panel-title">
@@ -328,16 +385,24 @@ function LogPanel({ selected }: { selected: EngineStatus | null }) {
           <p className="eyebrow">Process Logs</p>
           <h3>{selected?.name ?? "No engine"}</h3>
         </div>
+        <button disabled={busy || !selected} onClick={() => void refreshTail()} type="button">
+          <RefreshCw size={17} />
+          Refresh Tail
+        </button>
       </div>
       <div className="log-box">
-        {selected?.logPath ? (
+        {tail?.path || selected?.logPath ? (
           <>
             <span>Log file:</span>
-            <code>{selected.logPath}</code>
+            <code>{tail?.path ?? selected?.logPath}</code>
           </>
         ) : (
           <span>No log file assigned yet. Start an engine to create one.</span>
         )}
+      </div>
+      <div className="log-tail">
+        <span>{tail?.message ?? "Log tail pending."}</span>
+        <pre>{tail?.content || "No log output yet."}</pre>
       </div>
     </div>
   );

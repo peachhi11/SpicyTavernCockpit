@@ -226,11 +226,16 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
+  max-width: 100%;
   min-height: 2.3rem;
   border-radius: 999px;
   padding: 0 0.8rem;
   border: 1px solid rgb(255 255 255 / 12%);
   background: rgb(255 255 255 / 7%);
+}
+
+.status-pill span {
+  overflow-wrap: anywhere;
 }
 
 .status-pill.ok {
@@ -317,6 +322,33 @@ iframe {
 
 .log-box {
   margin-top: 1rem;
+}
+
+.log-tail {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.log-tail span {
+  color: #9fb5aa;
+}
+
+.log-tail pre {
+  min-height: 18rem;
+  max-height: 34rem;
+  overflow: auto;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 0.65rem;
+  margin: 0;
+  padding: 0.9rem;
+  background: rgb(0 0 0 / 34%);
+  color: #d9fbe8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .registry-panel {
