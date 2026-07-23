@@ -10,6 +10,7 @@ The first cockpit goal is deliberately practical: make the local stack easier to
 - React + Tailwind control deck.
 - Stable bundle identity: `com.peachhi11.spicytaverncockpit`.
 - Engine registry for Marinara clean, Marinara sandbox, SillyTavern, and Ollama.
+- Persisted registry editor for engine paths, launch commands, ports, UI URLs, and health URLs.
 - Start, stop, stop-all, health check, and embedded localhost views.
 - Network diagnostics for default egress and Chub reachability.
 - Per-engine log file locations.
@@ -46,3 +47,14 @@ npm run tauri:dev
 ## Design Rule
 
 The cockpit supervises external engines. It does not fork, absorb, or replace SillyTavern or Marinara. Those projects remain their own checkouts; this app owns launch, routing, health, and visibility.
+
+## Engine Registry
+
+The desktop shell writes `engine-registry.json` into the app data directory on first boot. The Registry panel can edit each engine's local checkout path, launch command, port, embedded UI URL, and health URL, then the Rust supervisor uses those saved values for start, stop, and health checks.
+
+Default engines:
+
+- `marinara-clean`: `/Library/Developer/GitHub2.0/Marinara-Engine-upstream-clean`, port `7860`.
+- `marinara-sandbox`: `/Library/Developer/GitHub2.0/SillyTavern/plugins/SillyTavern-EverythingPlugin/Untitled/Marinara-Engine`, port `7861`.
+- `sillytavern`: `/Library/Developer/GitHub2.0/SillyTavern`, port `8000`.
+- `ollama`: local `ollama serve`, port `11434`.

@@ -7,24 +7,30 @@ import {
   Logs,
   Play,
   RefreshCw,
+  RotateCcw,
+  Save,
+  Settings2,
   ShieldCheck,
   SquareTerminal,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  EngineConfig,
   EngineStatus,
   NetworkSnapshot,
   isTauriRuntime,
   listEngines,
   networkSnapshot,
   refreshEngine,
+  resetEngineRegistry,
+  saveEngineConfig,
   startEngine,
   stopAllEngines,
   stopEngine,
 } from "./native";
 
-type ViewMode = "embedded" | "logs" | "network";
+type ViewMode = "embedded" | "logs" | "network" | "registry";
 
 const stateLabel: Record<string, string> = {
   running: "Running",
@@ -105,6 +111,37 @@ export function App() {
     }
   }
 
+  async function saveRegistry(engine: EngineConfig) {
+    setBusyId(`registry:${engine.id}`);
+    setNotice("");
+    try {
+      const status = await saveEngineConfig(engine);
+      setEngines((current) => current.map((candidate) => (candidate.id === status.id ? status : candidate)));
+      setNotice(`${status.name} registry saved.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not save engine registry.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resetRegistry() {
+    setBusyId("registry:reset");
+    setNotice("");
+    try {
+      const next = await resetEngineRegistry();
+      setEngines(next);
+      if (!next.some((engine) => engine.id === selectedId)) {
+        setSelectedId(next[0]?.id ?? "marinara-clean");
+      }
+      setNotice("Engine registry reset to defaults.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not reset engine registry.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -154,6 +191,10 @@ export function App() {
               <Globe2 size={17} />
               Network
             </button>
+            <button onClick={() => setMode("registry")} type="button">
+              <Settings2 size={17} />
+              Registry
+            </button>
             <button onClick={() => setMode("logs")} type="button">
               <Logs size={17} />
               Logs
@@ -199,6 +240,13 @@ export function App() {
           <NetworkPanel network={network} onRefresh={() => void refreshNetwork()} />
         ) : mode === "logs" ? (
           <LogPanel selected={selected} />
+        ) : mode === "registry" ? (
+          <RegistryPanel
+            busy={busyId?.startsWith("registry:") ?? false}
+            onReset={() => void resetRegistry()}
+            onSave={(engine) => void saveRegistry(engine)}
+            selected={selected}
+          />
         ) : (
           <EngineFrame selected={selected} />
         )}
@@ -293,6 +341,118 @@ function LogPanel({ selected }: { selected: EngineStatus | null }) {
       </div>
     </div>
   );
+}
+
+function RegistryPanel(props: {
+  busy: boolean;
+  onReset: () => void;
+  onSave: (engine: EngineConfig) => void;
+  selected: EngineStatus | null;
+}) {
+  const [draft, setDraft] = useState<EngineConfig | null>(() => engineConfigFromStatus(props.selected));
+
+  useEffect(() => {
+    setDraft(engineConfigFromStatus(props.selected));
+  }, [props.selected]);
+
+  if (!draft) {
+    return (
+      <div className="empty-panel">
+        <Settings2 size={44} />
+        <h3>No engine selected</h3>
+        <button disabled={props.busy} onClick={props.onReset} type="button">
+          <RotateCcw size={17} />
+          Reset Registry
+        </button>
+      </div>
+    );
+  }
+
+  function updateField<K extends keyof EngineConfig>(field: K, value: EngineConfig[K]) {
+    setDraft((current) => (current ? { ...current, [field]: value } : current));
+  }
+
+  return (
+    <form
+      className="detail-panel registry-panel"
+      onSubmit={(event) => {
+        event.preventDefault();
+        props.onSave(draft);
+      }}
+    >
+      <div className="panel-title">
+        <div>
+          <p className="eyebrow">Engine Registry</p>
+          <h3>{draft.name}</h3>
+        </div>
+        <div className="panel-actions">
+          <button disabled={props.busy} onClick={props.onReset} type="button">
+            <RotateCcw size={17} />
+            Reset
+          </button>
+          <button disabled={props.busy} type="submit">
+            <Save size={17} />
+            Save
+          </button>
+        </div>
+      </div>
+
+      <div className="registry-grid">
+        <label className="field span-2">
+          <span>Name</span>
+          <input value={draft.name} onChange={(event) => updateField("name", event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Id</span>
+          <input readOnly value={draft.id} />
+        </label>
+        <label className="field">
+          <span>Port</span>
+          <input
+            inputMode="numeric"
+            min={1}
+            type="number"
+            value={draft.port ?? ""}
+            onChange={(event) => updateField("port", event.target.value ? Number(event.target.value) : null)}
+          />
+        </label>
+        <label className="field span-4">
+          <span>Path</span>
+          <input value={draft.cwd} onChange={(event) => updateField("cwd", event.target.value)} />
+        </label>
+        <label className="field span-2">
+          <span>UI URL</span>
+          <input value={draft.uiUrl ?? ""} onChange={(event) => updateField("uiUrl", event.target.value || null)} />
+        </label>
+        <label className="field span-2">
+          <span>Health URL</span>
+          <input value={draft.healthUrl ?? ""} onChange={(event) => updateField("healthUrl", event.target.value || null)} />
+        </label>
+        <label className="field span-4">
+          <span>Command</span>
+          <textarea value={draft.command} onChange={(event) => updateField("command", event.target.value)} />
+        </label>
+        <label className="field span-4">
+          <span>Description</span>
+          <input value={draft.description} onChange={(event) => updateField("description", event.target.value)} />
+        </label>
+      </div>
+    </form>
+  );
+}
+
+function engineConfigFromStatus(engine: EngineStatus | null): EngineConfig | null {
+  if (!engine) return null;
+  return {
+    id: engine.id,
+    name: engine.name,
+    description: engine.description,
+    cwd: engine.cwd,
+    command: engine.command,
+    port: engine.port,
+    uiUrl: engine.uiUrl,
+    healthUrl: engine.healthUrl,
+  };
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

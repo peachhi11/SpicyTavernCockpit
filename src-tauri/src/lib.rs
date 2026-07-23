@@ -3,7 +3,7 @@ use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fs::{create_dir_all, File},
+    fs::{create_dir_all, read_to_string, File},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -11,7 +11,9 @@ use std::{
 };
 use tauri::{Manager, State};
 
-#[derive(Clone, Debug, Serialize)]
+const REGISTRY_FILE_NAME: &str = "engine-registry.json";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EngineConfig {
     id: String,
@@ -22,6 +24,14 @@ struct EngineConfig {
     port: Option<u16>,
     ui_url: Option<String>,
     health_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineRegistryFile {
+    version: u16,
+    updated_at: String,
+    engines: Vec<EngineConfig>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,8 +118,100 @@ fn default_engines() -> Vec<EngineConfig> {
     ]
 }
 
-fn engine_by_id(id: &str) -> Result<EngineConfig, String> {
-    default_engines()
+fn registry_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve app data directory: {error}"))?;
+    create_dir_all(&app_dir)
+        .map_err(|error| format!("Could not create app data directory: {error}"))?;
+    Ok(app_dir.join(REGISTRY_FILE_NAME))
+}
+
+fn registry_file_for(engines: Vec<EngineConfig>) -> EngineRegistryFile {
+    EngineRegistryFile {
+        version: 1,
+        updated_at: Utc::now().to_rfc3339(),
+        engines,
+    }
+}
+
+fn write_registry(app: &tauri::AppHandle, engines: Vec<EngineConfig>) -> Result<(), String> {
+    let path = registry_path(app)?;
+    let registry = registry_file_for(engines);
+    let payload = serde_json::to_string_pretty(&registry)
+        .map_err(|error| format!("Could not serialize engine registry: {error}"))?;
+    std::fs::write(&path, payload)
+        .map_err(|error| format!("Could not write engine registry: {error}"))
+}
+
+fn normalize_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|inner| {
+        let trimmed = inner.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn normalize_engine(mut engine: EngineConfig) -> EngineConfig {
+    engine.id = engine.id.trim().to_string();
+    engine.name = engine.name.trim().to_string();
+    engine.description = engine.description.trim().to_string();
+    engine.cwd = engine.cwd.trim().to_string();
+    engine.command = engine.command.trim().to_string();
+    engine.ui_url = normalize_optional(engine.ui_url);
+    engine.health_url = normalize_optional(engine.health_url);
+    engine
+}
+
+fn validate_engine(engine: &EngineConfig) -> Result<(), String> {
+    if engine.id.is_empty() {
+        return Err("Engine id is required.".into());
+    }
+    if !engine.id.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
+        return Err("Engine id can only use lowercase letters, numbers, and hyphens.".into());
+    }
+    if engine.name.is_empty() {
+        return Err("Engine name is required.".into());
+    }
+    if engine.cwd.is_empty() {
+        return Err("Engine path is required.".into());
+    }
+    if engine.command.is_empty() {
+        return Err("Launch command is required.".into());
+    }
+    Ok(())
+}
+
+fn load_registry(app: &tauri::AppHandle) -> Result<Vec<EngineConfig>, String> {
+    let path = registry_path(app)?;
+    if !path.exists() {
+        let engines = default_engines();
+        write_registry(app, engines.clone())?;
+        return Ok(engines);
+    }
+
+    let content = read_to_string(&path)
+        .map_err(|error| format!("Could not read engine registry: {error}"))?;
+    let registry: EngineRegistryFile = serde_json::from_str(&content)
+        .map_err(|error| format!("Could not parse engine registry: {error}"))?;
+
+    let mut engines = Vec::new();
+    for engine in registry.engines {
+        let normalized = normalize_engine(engine);
+        validate_engine(&normalized)?;
+        engines.push(normalized);
+    }
+    Ok(engines)
+}
+
+fn engine_by_id(app: &tauri::AppHandle, id: &str) -> Result<EngineConfig, String> {
+    load_registry(app)?
         .into_iter()
         .find(|engine| engine.id == id)
         .ok_or_else(|| format!("Unknown engine: {id}"))
@@ -182,7 +284,9 @@ async fn health_for(engine: &EngineConfig) -> (bool, String) {
         Err(error) => return (false, format!("HTTP client error: {error}")),
     };
     match client.get(url).send().await {
-        Ok(response) if response.status().is_success() => (true, format!("HTTP {}", response.status())),
+        Ok(response) if response.status().is_success() => {
+            (true, format!("HTTP {}", response.status()))
+        }
         Ok(response) => (false, format!("HTTP {}", response.status())),
         Err(error) => (false, error.to_string()),
     }
@@ -194,17 +298,24 @@ async fn build_status(engine: &EngineConfig, registry: &ProcessRegistry) -> Engi
 }
 
 #[tauri::command]
-async fn list_engines(registry: State<'_, ProcessRegistry>) -> Result<Vec<EngineStatus>, String> {
+async fn list_engines(
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<Vec<EngineStatus>, String> {
     let mut statuses = Vec::new();
-    for engine in default_engines() {
+    for engine in load_registry(&app)? {
         statuses.push(build_status(&engine, &registry).await);
     }
     Ok(statuses)
 }
 
 #[tauri::command]
-async fn engine_status(id: String, registry: State<'_, ProcessRegistry>) -> Result<EngineStatus, String> {
-    let engine = engine_by_id(&id)?;
+async fn engine_status(
+    id: String,
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<EngineStatus, String> {
+    let engine = engine_by_id(&app, &id)?;
     Ok(build_status(&engine, &registry).await)
 }
 
@@ -214,7 +325,7 @@ async fn start_engine(
     app: tauri::AppHandle,
     registry: State<'_, ProcessRegistry>,
 ) -> Result<EngineStatus, String> {
-    let engine = engine_by_id(&id)?;
+    let engine = engine_by_id(&app, &id)?;
     if !Path::new(&engine.cwd).exists() {
         return Err(format!("Engine path does not exist: {}", engine.cwd));
     }
@@ -222,7 +333,11 @@ async fn start_engine(
     let already_running = {
         let mut children = registry.children.lock().expect("process registry poisoned");
         if let Some(child) = children.get_mut(&engine.id) {
-            if child.try_wait().map_err(|error| error.to_string())?.is_none() {
+            if child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
                 true
             } else {
                 children.remove(&engine.id);
@@ -274,8 +389,12 @@ async fn start_engine(
 }
 
 #[tauri::command]
-async fn stop_engine(id: String, registry: State<'_, ProcessRegistry>) -> Result<EngineStatus, String> {
-    let engine = engine_by_id(&id)?;
+async fn stop_engine(
+    id: String,
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<EngineStatus, String> {
+    let engine = engine_by_id(&app, &id)?;
     if let Some(mut child) = registry
         .children
         .lock()
@@ -289,7 +408,10 @@ async fn stop_engine(id: String, registry: State<'_, ProcessRegistry>) -> Result
 }
 
 #[tauri::command]
-async fn stop_all_engines(registry: State<'_, ProcessRegistry>) -> Result<Vec<EngineStatus>, String> {
+async fn stop_all_engines(
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<Vec<EngineStatus>, String> {
     let children: Vec<Child> = registry
         .children
         .lock()
@@ -303,7 +425,42 @@ async fn stop_all_engines(registry: State<'_, ProcessRegistry>) -> Result<Vec<En
         let _ = child.wait();
     }
 
-    list_engines(registry).await
+    list_engines(app, registry).await
+}
+
+#[tauri::command]
+async fn save_engine_config(
+    engine: EngineConfig,
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<EngineStatus, String> {
+    let engine = normalize_engine(engine);
+    validate_engine(&engine)?;
+
+    let mut engines = load_registry(&app)?;
+    let index = engines
+        .iter()
+        .position(|candidate| candidate.id == engine.id)
+        .ok_or_else(|| format!("Unknown engine: {}", engine.id))?;
+    engines[index] = engine.clone();
+    write_registry(&app, engines)?;
+
+    Ok(build_status(&engine, &registry).await)
+}
+
+#[tauri::command]
+async fn reset_engine_registry(
+    app: tauri::AppHandle,
+    registry: State<'_, ProcessRegistry>,
+) -> Result<Vec<EngineStatus>, String> {
+    let engines = default_engines();
+    write_registry(&app, engines.clone())?;
+
+    let mut statuses = Vec::new();
+    for engine in engines {
+        statuses.push(build_status(&engine, &registry).await);
+    }
+    Ok(statuses)
 }
 
 #[derive(Deserialize)]
@@ -388,6 +545,10 @@ pub fn run() {
         .setup(|app| {
             let app_dir = app.path().app_data_dir()?;
             create_dir_all(&app_dir)?;
+            let handle = app.handle().clone();
+            if let Err(error) = load_registry(&handle) {
+                log::warn!("Engine registry could not be initialized: {error}");
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -404,6 +565,8 @@ pub fn run() {
             start_engine,
             stop_engine,
             stop_all_engines,
+            save_engine_config,
+            reset_engine_registry,
             network_snapshot,
         ])
         .run(tauri::generate_context!())
